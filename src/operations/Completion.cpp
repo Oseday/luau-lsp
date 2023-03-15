@@ -19,6 +19,7 @@ static constexpr const char* Default = "4";
 static constexpr const char* WrongIndexType = "5";
 static constexpr const char* MetatableIndex = "6";
 static constexpr const char* AutoImports = "7";
+static constexpr const char* AutoImportsAbsolute = "71";
 static constexpr const char* Keywords = "8";
 } // namespace SortText
 
@@ -217,22 +218,26 @@ static lsp::CompletionItem createSuggestService(const std::string& service, size
     return item;
 }
 
-static lsp::CompletionItem createSuggestRequire(const std::string& name, const std::string& require, size_t lineNumber, size_t distance)
+static lsp::CompletionItem createSuggestRequire(const std::string& name, const std::vector<lsp::TextEdit>& textEdits, const char* sortText)
 {
-    auto importText = "local " + name + " = require(" + require + ")\n";
-
     lsp::CompletionItem item;
     item.label = name;
     item.kind = lsp::CompletionItemKind::Module;
-    item.detail = require + " Auto-import";
-    item.documentation = {lsp::MarkupKind::Markdown, codeBlock("lua", importText)};
+    item.detail = "Auto-import";
+    item.documentation = {lsp::MarkupKind::Markdown, codeBlock("lua", textEdits[0].newText)};
     item.insertText = name;
-    item.sortText = SortText::AutoImports + std::to_string(distance);
+    item.sortText = sortText;
 
-    lsp::Position placement{lineNumber, 0};
-    item.additionalTextEdits.emplace_back(lsp::TextEdit{{placement, placement}, importText});
+    item.additionalTextEdits = textEdits;
 
     return item;
+}
+
+static lsp::TextEdit createRequireTextEdit(const std::string& name, const std::string& path, size_t lineNumber)
+{
+    auto range = lsp::Range{{lineNumber, 0}, {lineNumber, 0}};
+    auto importText = "local " + name + " = require(" + path + ")\n";
+    return {range, importText};
 }
 
 static size_t getLengthEqual(const std::string& a, const std::string& b)
@@ -246,20 +251,28 @@ static size_t getLengthEqual(const std::string& a, const std::string& b)
     return i;
 }
 
-static std::string optimiseAbsoluteRequire(const std::string& path, const FindServicesVisitor& visitor) {
+static std::string optimiseAbsoluteRequire(const std::string& path, FindServicesVisitor& visitor, std::vector<lsp::TextEdit>& serviceImport) {
     // If the path starts with game/ReplicatedStorage/... and we have the ReplicatedStorage service
     // then we can optimise the require to be ReplicatedStorage/...
 
-    if (Luau::startsWith(path, "game/")) {
-        auto parts = Luau::split(path, '/');
-        if (parts.size() > 2) {
-            auto service = std::string(parts[1]);
-            if (visitor.serviceLineMap.find(std::string(service)) != visitor.serviceLineMap.end()) {
-                return service + "/" + Luau::join(std::vector(parts.begin() + 2, parts.end()), "/");
-            }
-        }
-    }
+    if (!Luau::startsWith(path, "game/"))
+        return path;
     
+    auto parts = Luau::split(path, '/');
+    if (parts.size() > 2) {
+        auto service = std::string(parts[1]);
+        
+        if (visitor.serviceLineMap.find(std::string(service)) == visitor.serviceLineMap.end()) {
+            // If we haven't imported the service, then we auto-import it
+            size_t lineNumber = visitor.findBestLine(service);
+            lsp::Position placement{lineNumber, 0};
+            auto importText = "local " + service + " = game:GetService(\"" + service + "\")\n";
+            serviceImport.emplace_back(lsp::TextEdit{{placement, placement}, importText});
+        }
+
+        return service + "/" + Luau::join(std::vector(parts.begin() + 2, parts.end()), "/");
+    }
+
     return path;
 }
 
@@ -296,25 +309,15 @@ void WorkspaceFolder::suggestImports(
             minimumLineNumber = *serviceVisitor.firstServiceDefinitionLine > minimumLineNumber ? *serviceVisitor.firstServiceDefinitionLine : minimumLineNumber;
 
         auto services = getServiceNames(frontend.globalsForAutocomplete.globalScope);
-        size_t lineNumber = minimumLineNumber;
         for (auto& service : services)
         {
             // ASSUMPTION: if the service was defined, it was defined with the exact same name
             if (serviceVisitor.serviceLineMap.find(service) != serviceVisitor.serviceLineMap.end())
                 continue;
 
-            lineNumber = minimumLineNumber;
-            for (auto& [definedService, stat] : serviceVisitor.serviceLineMap)
-            {
-                auto location = stat->location.begin.line;
-                if (definedService < service && location >= lineNumber)
-                    lineNumber = location + 1;
-            }
-
+            size_t lineNumber = serviceVisitor.findBestLine(service, minimumLineNumber);
             result.emplace_back(createSuggestService(service, lineNumber));
         }
-
-        minimumLineNumber = lineNumber;
     }
 
     {
@@ -333,13 +336,16 @@ void WorkspaceFolder::suggestImports(
                 continue;
 
             std::string requirePath;
-            auto distance = pathDistance(path, moduleName);
-            if (distance == 0)
-                requirePath = "./" + name;
-            else if (distance <= config.completion.maxRequirePathDistance)
-                requirePath = std::filesystem::relative(path, moduleName).string();
+            std::vector<lsp::TextEdit> textEdits;
+            bool isRelative = false;
+
+            auto parent1 = getParentPath(moduleName), parent2 = getParentPath(path);
+            if (Luau::startsWith(moduleName, path) || Luau::startsWith(path, moduleName) || parent1 == parent2) {
+                requirePath = "./" + std::filesystem::relative(path, moduleName).string();
+                isRelative = true;
+            }
             else
-                requirePath = optimiseAbsoluteRequire(path, serviceVisitor);
+                requirePath = optimiseAbsoluteRequire(path, serviceVisitor, textEdits);
             
             requirePath = convertToScriptPath(requirePath);
 
@@ -361,7 +367,9 @@ void WorkspaceFolder::suggestImports(
                 }
             }
 
-            result.emplace_back(createSuggestRequire(name, requirePath, lineNumber, distance));
+            textEdits.emplace_back(createRequireTextEdit(node->name, requirePath, lineNumber));
+
+            result.emplace_back(createSuggestRequire(name, textEdits, isRelative ? SortText::AutoImports : SortText::AutoImportsAbsolute));
         }
     }
 }

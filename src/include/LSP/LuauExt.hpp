@@ -121,7 +121,20 @@ bool isRequire(const Luau::AstExpr* expr);
 struct FindServicesVisitor : public Luau::AstVisitor
 {
     std::optional<size_t> firstServiceDefinitionLine = std::nullopt;
+    std::optional<size_t> lastServiceDefinitionLine = std::nullopt;
     std::map<std::string, Luau::AstStatLocal*> serviceLineMap{};
+
+    size_t findBestLine(const std::string& serviceName, std::optional<size_t> minimumLineNumber = std::nullopt)
+    {
+        size_t lineNumber = minimumLineNumber.value_or(firstServiceDefinitionLine.value_or(0));
+        for (auto& [definedService, stat] : serviceLineMap)
+        {
+            auto location = stat->location.begin.line;
+            if (definedService < serviceName && location >= lineNumber)
+                lineNumber = location + 1;
+        }
+        return lineNumber;
+    }
 
     bool visit(Luau::AstStatLocal* local) override
     {
@@ -140,6 +153,8 @@ struct FindServicesVisitor : public Luau::AstVisitor
         {
             firstServiceDefinitionLine =
                 !firstServiceDefinitionLine.has_value() || firstServiceDefinitionLine.value() >= line ? line : firstServiceDefinitionLine.value();
+            lastServiceDefinitionLine =
+                !lastServiceDefinitionLine.has_value() || lastServiceDefinitionLine.value() <= line ? line : lastServiceDefinitionLine.value();
             serviceLineMap.emplace(std::string(localName->name.value), local);
         }
 
