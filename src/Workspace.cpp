@@ -202,10 +202,14 @@ bool WorkspaceFolder::updateSourceMap()
 
 void WorkspaceFolder::initialize()
 {
+    client->sendTrace("initialising folder typechecker with builtin globals");
+
     Luau::registerBuiltinGlobals(frontend, frontend.globals, /* typeCheckForAutocomplete = */ false);
     Luau::registerBuiltinGlobals(frontend, frontend.globalsForAutocomplete, /* typeCheckForAutocomplete = */ true);
 
     Luau::attachTag(Luau::getGlobalBinding(frontend.globalsForAutocomplete, "require"), "Require");
+
+    client->sendTrace("initialising folder typechecker with definitions files", json(client->definitionsFiles).dump());
 
     if (client->definitionsFiles.empty())
     {
