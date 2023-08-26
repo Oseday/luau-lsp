@@ -829,12 +829,6 @@ def filterMember(klassName: str, member: ApiMember):
         return False
     if klassName in IGNORED_MEMBERS and member["Name"] in IGNORED_MEMBERS[klassName]:
         return False
-    if (
-        member["MemberType"] == "Function"
-        and klassName
-        and member["Name"] == "GetService"
-    ):
-        return False
 
     return True
 
@@ -880,13 +874,6 @@ def declareClass(klass: ApiClass) -> str:
         declareMember,
         filter(lambda member: filterMember(klass["Name"], member), klass["Members"]),
     )
-
-    def declareService(service: str):
-        return f'\tfunction GetService(self, service: "{service}"): {service}\n'
-
-    # Special case ServiceProvider:GetService()
-    if klass["Name"] == "ServiceProvider":
-        memberDefinitions = chain(memberDefinitions, map(declareService, SERVICES))
 
     if klass["Name"] in EXTRA_MEMBERS:
         memberDefinitions = chain(
@@ -956,17 +943,13 @@ def printDataTypeConstructors(types: DataTypesDump):
         name = klass["Name"]
         members = klass["Members"]
 
-        isInstanceNew = False
         isBrickColorNew = False
 
         # Handle overloadable functions
         functions: defaultdict[str, List[ApiFunction]] = defaultdict(list)
         for member in members:
             if member["MemberType"] == "Function":
-                if name == "Instance" and member["Name"] == "new":
-                    isInstanceNew = True
-                    continue
-                elif (
+                if (
                     name == "BrickColor"
                     and member["Name"] == "new"
                     and len(member["Parameters"]) == 1
@@ -984,52 +967,6 @@ def printDataTypeConstructors(types: DataTypesDump):
                 pass
             elif member["MemberType"] == "Event":
                 out += f"\t{escapeName(member['Name'])}: RBXScriptSignal,\n"  # TODO: type this
-
-        # Special case instance new
-        if isInstanceNew:
-            functions["new"] = [
-                {
-                    "Parameters": [
-                        {
-                            "Name": "className",
-                            "Type": {
-                                "Name": f'"{inst}"',
-                                "Category": "PRIMITIVE_SERVICE_NAME",
-                            },
-                        },
-                        {
-                            "Name": "parent",
-                            "Type": {
-                                "Name": "Instance?",
-                                "Category": "Class",
-                            },
-                        },
-                    ],
-                    "ReturnType": {"Name": inst, "Category": "PRIMITIVE_SERVICE"},
-                }
-                for inst in CREATABLE
-            ] + [
-                # Instance.new(string) -> Instance fallback
-                {
-                    "Parameters": [
-                        {
-                            "Name": "className",
-                            "Type": {
-                                "Name": "string",
-                                "Category": "PRIMITIVE_SERVICE_NAME",
-                            },
-                        },
-                        {
-                            "Name": "parent",
-                            "Type": {
-                                "Name": "Instance?",
-                                "Category": "Class",
-                            },
-                        },
-                    ],
-                    "ReturnType": {"Name": "Instance", "Category": "PRIMITIVE_SERVICE"},
-                }
-            ]
 
         # Special case string BrickColor new
         if isBrickColorNew:
@@ -1213,6 +1150,12 @@ def topologicalSortDataTypes(dataTypes: List[DataType]) -> List[DataType]:
     return list(reversed(sort))
 
 
+def printJsonPrologue():
+    data = {"CREATABLE_INSTANCES": CREATABLE, "SERVICES": SERVICES}
+    print("--##" + json.dumps(data, indent=None))
+    print()
+
+
 def processBrickColors(colors):
     for color in colors["BrickColors"]:
         BRICK_COLORS.add(color["Name"])
@@ -1233,6 +1176,7 @@ loadClassesIntoStructures(dump)
 corrections: CorrectionsDump = json.loads(requests.get(CORRECTIONS_URL).text)
 applyCorrections(dump, corrections)
 
+printJsonPrologue()
 print(START_BASE)
 printEnums(dump)
 printDataTypes(topologicalSortDataTypes(dataTypes["DataTypes"]))
