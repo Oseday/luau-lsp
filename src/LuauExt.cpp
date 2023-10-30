@@ -989,10 +989,12 @@ lsp::Diagnostic createLintDiagnostic(const Luau::LintWarning& lint, const TextDo
         lint.code == Luau::LintWarning::Code::Code_FunctionUnused)
     {
         diagnostic.tags.emplace_back(lsp::DiagnosticTag::Unnecessary);
+    	diagnostic.severity = lsp::DiagnosticSeverity::Hint;
     }
     else if (lint.code == Luau::LintWarning::Code::Code_DeprecatedApi || lint.code == Luau::LintWarning::Code::Code_DeprecatedGlobal)
     {
         diagnostic.tags.emplace_back(lsp::DiagnosticTag::Deprecated);
+    	diagnostic.severity = lsp::DiagnosticSeverity::Hint;
     }
 
     return diagnostic;
